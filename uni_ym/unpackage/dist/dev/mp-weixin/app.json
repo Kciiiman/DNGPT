@@ -1,8 +1,10 @@
 {
   "pages": [
     "pages/index/index",
+    "pages/test/test2",
+    "pages/api-use/api-use2",
     "pages/test/test",
-    "pages/api-use/api-use",
+    "pages/problem/problem",
     "pages/mine/mine"
   ],
   "window": {

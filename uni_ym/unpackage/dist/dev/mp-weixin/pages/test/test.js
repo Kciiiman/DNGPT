@@ -2,14 +2,18 @@
 const common_vendor = require("../../common/vendor.js");
 const questionnaire = require("../../questionnaire.js");
 const recorderManager = common_vendor.index.getRecorderManager();
-common_vendor.index.getFileSystemManager();
+common_vendor.wx$1.getFileSystemManager();
 const _sfc_main = {
   data() {
     return {
       //api中使用的数据
       keywords: "",
       ttsOption: "",
+      //tts音频位置
       stt_text: "",
+      //stt文本
+      questionIndex: 0,
+      //问题索引
       questions: questionnaire.data.questions,
       question: "",
       isVoiceInput: false,
@@ -20,8 +24,11 @@ const _sfc_main = {
       voicePath: "",
       //说话录音存储
       svoicePath: "",
-      //判断用户输出
+      isFirstSendQues: false,
+      //是否已经从问卷中提取问题:判断第一次
       isUserInput: false,
+      //判断用户输出
+      isSendingquestion: false,
       //键盘高度
       keyboardHeight: 0,
       //底部消息发送高度
@@ -125,23 +132,30 @@ const _sfc_main = {
         });
       }, 15);
     },
-    // 发送消息
-    handleSend() {
-      if (!this.chatMsg || !/^\s+$/.test(this.chatMsg)) {
+    // 发送消息(文字)
+    async handleSend() {
+      if (this.chatMsg.trim().length > 0) {
+        this.isSendingquestion = true;
         let obj = {
           botContent: "",
           userContent: this.chatMsg,
           image: "/static/image/用户.png"
         };
         this.msgList.push(obj);
+        if (this.isFirstSendQues) {
+          this.keywords = await this.extractKeywords(this.chatMsg);
+        }
         this.chatMsg = "";
         this.isUserInput = true;
         this.scrollToBottom();
+        if (this.isUserInput == true) {
+          this.sendQuestion();
+        }
       } else {
-        this.$modal.showToast("不能发送空白消息");
-      }
-      if (this.isUserInput == true) {
-        this.sendQuestion();
+        common_vendor.index.showToast({
+          title: "请不要发送空消息...",
+          image: "/static/image/空消息.png"
+        });
       }
     },
     //提出问卷问题
@@ -153,9 +167,27 @@ const _sfc_main = {
           userContent: "",
           image: "/static/image/机器人.png"
         };
-        this.msgList.push(obj);
-        this.scrollToBottom();
         this.tts();
+        setTimeout(() => {
+          this.msgList.push(obj);
+        }, 2e3);
+        this.scrollToBottom();
+        this.isFirstSendQues = true;
+      }
+    },
+    //发送回答消息
+    sendAnswer() {
+      if (!this.isSendingquestion) {
+        if (!this.isVoiceInput) {
+          this.handleSend();
+        } else {
+          this.startPress();
+        }
+      } else {
+        common_vendor.index.showToast({
+          title: "正在输出问题，请等待...",
+          image: "/static/image/等待.png"
+        });
       }
     },
     //api函数汇总
@@ -165,43 +197,53 @@ const _sfc_main = {
     },
     //抽取问题
     extractJson() {
-      const randomIndex = Math.floor(Math.random() * this.questions.length);
-      const questionId = this.questions[randomIndex].id;
-      const foundQuestion = this.findQuestionById(questionId);
-      this.question = foundQuestion;
-      console.log("Found question:", foundQuestion);
+      if (this.questionIndex >= this.questions.length) {
+        this.question = "问卷结束";
+      } else {
+        const questionId = this.questions[this.questionIndex].id;
+        const foundQuestion = this.findQuestionById(questionId);
+        this.question = foundQuestion;
+        this.questionIndex++;
+        console.log("Found question:", foundQuestion);
+      }
     },
-    extractKeywords() {
-      common_vendor.index.request({
-        url: "http://127.0.0.1:5000/extraction",
-        data: {
-          "question": "一般来说，我一年要吃一百碗米饭。"
-        },
-        method: "POST",
-        success: (res) => {
-          console.log(res.data);
-          this.keywords = res.data.extract;
-        }
+    extractKeywords(answer) {
+      return new Promise((resolve, reject) => {
+        common_vendor.index.request({
+          url: "http://127.0.0.1:5000/extraction",
+          data: {
+            "question": answer
+          },
+          method: "POST",
+          success: (res) => {
+            console.log(res.data);
+            resolve(res.data.extract);
+          }
+        });
       });
     },
-    tts() {
+    async tts() {
       const currentQuestion = this.question;
-      common_vendor.index.request({
-        url: "http://127.0.0.1:5000/tts",
-        data: {
-          "text": currentQuestion
-        },
-        method: "POST",
-        success: (res) => {
-          console.log(res.data);
-          this.ttsOption = res.data.path;
-          setTimeout(() => {
-            this.playVoice(this.ttsOption);
-          }, 1e3);
-        },
-        fail: (err) => {
-          console.error(err);
-        }
+      this.ttsOption = await this.ttsfuction(currentQuestion);
+      console.log(this.ttsOption);
+      this.playVoice(this.ttsOption);
+    },
+    ttsfuction(currentQuestion) {
+      return new Promise((resolve, reject) => {
+        common_vendor.index.request({
+          url: "http://127.0.0.1:5000/tts",
+          data: {
+            "text": currentQuestion
+          },
+          method: "POST",
+          success: (res) => {
+            resolve(res.data.path);
+            console.log(res.data.path);
+          },
+          fail: (err) => {
+            console.error(err);
+          }
+        });
       });
     },
     playVoice(audiopath) {
@@ -227,31 +269,43 @@ const _sfc_main = {
         console.log("i am onEnded");
         innerAudioContext.destroy();
         console.log("已执行destory()");
+        this.isSendingquestion = false;
       });
     },
-    stt() {
-      common_vendor.index.request({
-        url: "http://127.0.0.1:5000/stt",
-        // data:{
-        // 	"path": this.svoicePath
-        // },
-        method: "GET",
-        success: (res) => {
-          console.log(res.data);
-          this.stt_text = res.data.text;
-          let obj = {
-            botContent: "",
-            userContent: this.stt_text,
-            image: "/static/image/用户.png"
-          };
-          this.msgList.push(obj);
-          this.chatMsg = "";
-          this.isUserInput = true;
-          this.scrollToBottom();
-          if (this.isUserInput == true) {
-            this.sendQuestion();
+    async stt() {
+      this.stt_text = await this.sttfuction();
+      let obj = {
+        botContent: "",
+        userContent: this.stt_text,
+        image: "/static/image/用户.png"
+      };
+      this.msgList.push(obj);
+      if (this.isFirstSendQues) {
+        this.keywords = await this.extractKeywords(this.stt_text);
+      }
+      this.chatMsg = "";
+      this.isUserInput = true;
+      this.scrollToBottom();
+      if (this.isUserInput == true) {
+        this.sendQuestion();
+      }
+    },
+    sttfuction() {
+      return new Promise((resolve, reject) => {
+        common_vendor.index.request({
+          url: "http://127.0.0.1:5000/stt",
+          // data:{
+          // 	"path": this.svoicePath
+          // },
+          method: "GET",
+          success: (res) => {
+            resolve(res.data.text);
+            console.log(res.data.text);
+          },
+          fail: (err) => {
+            console.error(err);
           }
-        }
+        });
       });
     },
     //录音上传
@@ -293,6 +347,7 @@ const _sfc_main = {
       this.isVoiceInput = !this.isVoiceInput;
     },
     startPress() {
+      this.isSendingquestion = true;
       this.isVoiceInputActive = true;
       this.VoiceTitle = "说话中...";
       console.log("开始录音");
@@ -313,6 +368,12 @@ const _sfc_main = {
       this.VoiceTitle = "按住说话";
       console.log("录音结束");
       recorderManager.stop();
+    },
+    //保存数据
+    dataSave() {
+    },
+    //取用数据
+    dataGet() {
     }
     // playVoice02() {
     // 	console.log('播放录音');
@@ -354,7 +415,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
     e: $data.scrollTop,
     f: $data.isVoiceInput ? "/static/image/麦克风-active.png" : "/static/image/麦克风.png",
     g: common_vendor.o(($event) => $options.changeTo()),
-    h: common_vendor.o((...args) => $options.handleSend && $options.handleSend(...args)),
+    h: common_vendor.o((...args) => $options.sendAnswer && $options.sendAnswer(...args)),
     i: common_vendor.o((...args) => $options.sendHeight && $options.sendHeight(...args)),
     j: common_vendor.o((...args) => $options.focus && $options.focus(...args)),
     k: common_vendor.o((...args) => $options.blur && $options.blur(...args)),
@@ -362,13 +423,13 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
     m: common_vendor.o(($event) => $data.chatMsg = $event.detail.value),
     n: !$data.isVoiceInput,
     o: !$data.isVoiceInput,
-    p: common_vendor.o((...args) => $options.handleSend && $options.handleSend(...args)),
+    p: common_vendor.o((...args) => $options.sendAnswer && $options.sendAnswer(...args)),
     q: `${$data.keyboardHeight - 60}rpx`,
     r: common_vendor.t($data.VoiceTitle),
     s: $data.isVoiceInput,
     t: $data.isVoiceInputActive ? 1 : "",
-    v: common_vendor.o((...args) => $options.startPress && $options.startPress(...args)),
-    w: common_vendor.o((...args) => $options.startPress && $options.startPress(...args)),
+    v: common_vendor.o((...args) => $options.sendAnswer && $options.sendAnswer(...args)),
+    w: common_vendor.o((...args) => $options.sendAnswer && $options.sendAnswer(...args)),
     x: common_vendor.o((...args) => $options.endPress && $options.endPress(...args)),
     y: common_vendor.o((...args) => $options.endPress && $options.endPress(...args)),
     z: `${$options.inputHeight}rpx`

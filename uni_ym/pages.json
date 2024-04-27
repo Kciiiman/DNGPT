@@ -4,14 +4,21 @@
 			"path": "pages/index/index"
 		},
 		{
+			"path": "pages/test/test2"
+		},
+		{
+			"path": "pages/api-use/api-use2"
+		},
+		{
 			"path": "pages/test/test"
 		},
 		{
-			"path": "pages/api-use/api-use"
+			"path": "pages/problem/problem"
 		},
 		{
 			"path": "pages/mine/mine"
 		}
+	
 	],
 	"tabBar": {
 		"color": "#7A7E83",

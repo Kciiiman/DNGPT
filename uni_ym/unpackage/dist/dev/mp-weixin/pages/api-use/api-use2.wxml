@@ -1,0 +1,1 @@
+<view><button bindtap="{{a}}">开始录音</button><button bindtap="{{b}}">停止录音</button><button bindtap="{{c}}">播放录音</button></view>

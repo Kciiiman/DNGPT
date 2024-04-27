@@ -1,3 +1,4 @@
+//原版
 <template>
 	<view class="chat">
     <!-- 顶部标题 -->
@@ -5,7 +6,7 @@
       <!-- 返回图标 -->
       <u-icon class="icon" name="arrow-left" size="20px" color="#000" @click="goback()"></u-icon>
       <!-- 标题 -->
-    <view class="text">匿名</view>
+    <view class="text">营养师</view>
 
     </view>
 		<scroll-view  :style="{height: `${windowHeight-inputHeight - 180}rpx`}"
@@ -50,7 +51,7 @@
           <textarea v-model="chatMsg"
             maxlength="300"
             confirm-type="send"
-            @confirm="handleSend"
+            @confirm="sendAnswer"
             placeholder="输入你的回答~"
             :show-confirm-bar="false"
             :adjust-position="false" 
@@ -58,14 +59,14 @@
             @focus="focus" @blur="blur"
            auto-height></textarea>
         </view>
-				<button v-show="!isVoiceInput" @click="handleSend" class="send-btn">发送</button>
+				<button v-show="!isVoiceInput" @click="sendAnswer" class="send-btn">发送</button>
 		</view>
 		<!-- 语音输入按钮 -->
 		<button v-show="isVoiceInput"
 			class="voice-input-button"
 			:class="{ active: isVoiceInputActive }" 
-			@mousedown="startPress"
-			@touchstart="startPress"
+			@mousedown="sendAnswer"
+			@touchstart="sendAnswer"
 			@mouseup="endPress"
 			@touchend="endPress">{{VoiceTitle}}</button>
 		</view>
@@ -75,14 +76,15 @@
 <script>
 	import data from '../../static/questionnaire.json'
 	const recorderManager = uni.getRecorderManager();
-	const fs = uni.getFileSystemManager();
+	const fs = wx.getFileSystemManager();
 	export default{
 		data() {
 			return {
 				//api中使用的数据
 				keywords: '',
-				ttsOption:'',
-				stt_text:'',
+				ttsOption:'',	//tts音频位置
+				stt_text:'',	//stt文本
+				questionIndex: 0,	//问题索引
 				questions: data.questions,
 				question:'',
 				isVoiceInput: false,	//转换语音输入按钮
@@ -90,8 +92,9 @@
 				VoiceTitle: "按住说话",
 				voicePath: '', //说话录音存储
 				svoicePath: '',
-				//判断用户输出
-				isUserInput:false, 
+				isFirstSendQues: false,	//是否已经从问卷中提取问题:判断第一次
+				isUserInput:false, 	//判断用户输出
+				isSendingquestion:false,
 				//键盘高度
 				keyboardHeight:0,
 				//底部消息发送高度
@@ -200,25 +203,35 @@
 					})
 				},15)
 			},
-			// 发送消息
-			handleSend() {
-					//如果消息不为空;文字发送
-					if(!this.chatMsg||!/^\s+$/.test(this.chatMsg)){
-						let obj = {
-							botContent: "",
-							userContent: this.chatMsg,
-							image:"/static/image/用户.png",
-						}
-						this.msgList.push(obj);
-						this.chatMsg = '';
-						this.isUserInput = true;
-						this.scrollToBottom()
-					}else {
-						this.$modal.showToast('不能发送空白消息')
+			
+			// 发送消息(文字)
+			async handleSend() {
+				//如果消息不为空;文字发送
+				if(this.chatMsg.trim().length > 0){
+					this.isSendingquestion = true;
+					let obj = {
+						botContent: "",
+						userContent: this.chatMsg,
+						image:"/static/image/用户.png",
 					}
+					this.msgList.push(obj);
+					if(this.isFirstSendQues)
+					{
+						this.keywords = await this.extractKeywords(this.chatMsg);
+					}
+					this.chatMsg = '';
+					this.isUserInput = true;
+					this.scrollToBottom();
 					if(this.isUserInput == true){
 						this.sendQuestion();
 					}
+				}
+				else {
+					uni.showToast({
+						title: '请不要发送空消息...',
+						image: '/static/image/空消息.png'
+					});
+				}
 			},
 			//提出问卷问题
 			sendQuestion(){
@@ -230,10 +243,32 @@
 								userContent: "",
 								image:"/static/image/机器人.png"
 					}
-					this.msgList.push(obj);
-					this.scrollToBottom();
 					this.tts();
+					setTimeout(() => {
+						this.msgList.push(obj);
+						},2000);
+					this.scrollToBottom();
+					this.isFirstSendQues = true;
 				}
+			},
+			
+			//发送回答消息
+			sendAnswer(){
+				if(!this.isSendingquestion){
+					if(!this.isVoiceInput){
+						this.handleSend();
+					}
+					else{
+						this.startPress();
+					}
+				}
+				else{
+					uni.showToast({
+						title: '正在输出问题，请等待...',
+						image: '/static/image/等待.png'
+					});
+				}
+				
 			},
 			
 			//api函数汇总
@@ -243,49 +278,63 @@
 			},
 			//抽取问题
 			extractJson() {
-				const randomIndex = Math.floor(Math.random() * this.questions.length);
-				const questionId = this.questions[randomIndex].id;
+				if(this.questionIndex >= this.questions.length)
+				{
+					this.question = "问卷结束";
+				}
+				else
+				{
+				const questionId = this.questions[this.questionIndex].id;
 				const foundQuestion = this.findQuestionById(questionId);
 				this.question = foundQuestion;
+				this.questionIndex++;
 				console.log('Found question:', foundQuestion);
+				}
 			},
-			extractKeywords () {
+			extractKeywords (answer) {
 			  // 调用后端接口提取关键词
-				uni.request({
-					url:'http://127.0.0.1:5000/extraction',
-					data:{
-						"question": "一般来说，我一年要吃一百碗米饭。"
-						},
-					method:'POST',
-					success: (res) => {
-						console.log(res.data);
-						this.keywords = res.data.extract;
-					}
+				return new Promise((resolve, reject) =>{ 
+					uni.request({
+						url:'http://127.0.0.1:5000/extraction',
+						data:{
+							"question": answer
+							},
+						method:'POST',
+						success: (res) => {
+							console.log(res.data);
+							resolve(res.data.extract)
+						}
+					})
 				})
 			},
-			tts() {
+			async tts() {
 			    const currentQuestion = this.question;
-			    
-			    uni.request({
-			        url: 'http://127.0.0.1:5000/tts',
-			        data: {
-			            "text": currentQuestion
-			        },
-			        method: 'POST',
-			        success: (res) => {
-			            console.log(res.data);
-			            this.ttsOption = res.data.path;
-			            // 在成功回调中调用 playVoice()，等待一段时间确保文件写入完成
-			            setTimeout(() => {
-			                this.playVoice(this.ttsOption);
-			            }, 1000); // 这里可以根据实际情况调整等待时间
-			        },
-			        fail: (err) => {
-			            console.error(err);
-			            // 处理请求失败的情况
-			        }
-			    })
+	
+				this.ttsOption = await this.ttsfuction(currentQuestion)
+				console.log(this.ttsOption);
+				this.playVoice(this.ttsOption);
 			},
+			
+			ttsfuction(currentQuestion){
+				return new Promise((resolve, reject) =>{ 
+					uni.request({
+						url: 'http://127.0.0.1:5000/tts',
+						data: {
+							"text": currentQuestion
+						},
+						method: 'POST',
+						success: (res) => {
+							resolve(res.data.path);
+							console.log(res.data.path);
+						},
+						fail: (err) => {
+							console.error(err);
+							// 处理请求失败的情况
+						}
+					})
+				})
+			},
+			
 			playVoice(audiopath) {
 				const innerAudioContext = uni.createInnerAudioContext();
 				innerAudioContext.autoplay = true;
@@ -293,6 +342,7 @@
 				// 截取相对路径部分
 				const relativePath = audiopath.substring(audiopath.lastIndexOf('static'));
 				innerAudioContext.src = relativePath;
+				
 				innerAudioContext.onPlay(() => {
 					console.log("开始播放");
 				});
@@ -303,44 +353,57 @@
 				});
 				
 				innerAudioContext.onStop(() => {
-				  console.log('i am onStop')
-				  innerAudioContext.stop()
-				  //播放停止，销毁该实例
-				  innerAudioContext.destroy()
-
+					console.log('i am onStop')
+					innerAudioContext.stop()
+					//播放停止，销毁该实例
+					innerAudioContext.destroy()
 				})
 				innerAudioContext.onEnded(() => {
-				  console.log('i am onEnded')
-				  //播放结束，销毁该实例
-				  innerAudioContext.destroy()
-				  console.log('已执行destory()')
+					console.log('i am onEnded')
+					//播放结束，销毁该实例
+					innerAudioContext.destroy()
+					console.log('已执行destory()')
+					this.isSendingquestion = false;
 				})
 
 			},
-			stt(){
-				uni.request({
-					url:'http://127.0.0.1:5000/stt',
-					// data:{
-					// 	"path": this.svoicePath
-					// },
-					method:'GET',
-					success: (res) => {
-						console.log(res.data);
-						this.stt_text = res.data.text;
-						let obj = {
-							botContent: "",
-							userContent: this.stt_text,
-							image:"/static/image/用户.png",
+			async stt(){
+				this.stt_text = await this.sttfuction()
+				let obj = {
+					botContent: "",
+					userContent: this.stt_text,
+					image:"/static/image/用户.png",
+				}
+				this.msgList.push(obj);
+				if(this.isFirstSendQues)
+				{
+					this.keywords = await this.extractKeywords(this.stt_text);
+				}
+				this.chatMsg = '';
+				this.isUserInput = true;
+				this.scrollToBottom();
+				if(this.isUserInput == true){
+					this.sendQuestion();
+				}
+			},
+			sttfuction(){
+				 return new Promise((resolve, reject) => {	
+					uni.request({
+						url:'http://127.0.0.1:5000/stt',
+						// data:{
+						// 	"path": this.svoicePath
+						// },
+						method:'GET',
+						success: (res) => {
+							resolve(res.data.text);
+							console.log(res.data.text);
+						},
+						fail: (err) => {
+								console.error(err);
+								// 处理请求失败的情况
 						}
-						this.msgList.push(obj);
-						this.chatMsg = '';
-						this.isUserInput = true;
-						this.scrollToBottom()
-						if(this.isUserInput == true){
-							this.sendQuestion();
-						}
-					}
-				})
+					})
+				});
 			},
 			//录音上传
 			submitFile() {
@@ -380,6 +443,7 @@
 				this.isVoiceInput = !this.isVoiceInput;
 			},
 			startPress() {
+				this.isSendingquestion = true;
 				this.isVoiceInputActive = true;
 				this.VoiceTitle = "说话中...";
 				console.log('开始录音');
@@ -390,7 +454,6 @@
 				  numberOfChannels: 2, // 录音通道数，2为立体声，1为单声道
 				  encodeBitRate: 192000, // 编码码率，wav 格式需设置
 				});
-				
 			},
 			endPress() {
 				this.isVoiceInputActive = false;
@@ -398,6 +461,14 @@
 				console.log('录音结束');
 				recorderManager.stop();
 			},
+			//保存数据
+			dataSave(){
+
+			},
+			//取用数据
+			dataGet(){
+				
+			}
 			// playVoice02() {
 			// 	console.log('播放录音');
 
